@@ -54,3 +54,261 @@ By combining the core features of the Souls genre with a cyberpunk near-future w
 - **Ma Yuehang**: Map design
 - **Lei Yutian**: Map Art
 - **Chen Junxi**: Character Art
+
+# Zhang Xue's Blueprint Implementation - Shadow ARPG
+
+## Added a feature where melee enemies' bodies gradually disappear after being hit and killed (fixed the bug where they fly twice)
+
+```blueprint
+// Enemy Death Timeline
+Event Take Damage →
+    Current Health <= 0 →
+    Set Collision Enabled: No Collision →
+    Set Physics: Simulate Physics = False →
+    Timeline: Body Fade →
+        Track: Alpha (0.0 to 1.0, 3.0 seconds) →
+        Set Scalar Parameter Value On Materials →
+            Parameter Name: "Opacity" →
+            Value: 1.0 - Alpha →
+    Timeline Finished →
+        Destroy Actor
+
+// Material Setup for Fade
+Event BeginPlay →
+    Create Dynamic Material Instance →
+        Source Material: M_Enemy_Material →
+    Set Material: Dynamic Material Instance
+```
+
+## Created a new kind of melee enemy (Includes patrol, combat, death, etc. logic)
+
+```blueprint
+// BP_Enemy_Dummy Components
+Components:
+├── Capsule Component
+├── Mesh (Character): SK_Mannequin
+├── Widget Component (Health Bar)
+└── AI Controller Class: BP_SWAIController
+
+// Blackboard Keys
+Target: Object
+PatrolPoint: Vector  
+EnemyState: Enum
+LastKnownLocation: Vector
+
+// Behavior Tree Structure
+ROOT →
+    Selector →
+        Blackboard Based Condition: Player In Range →
+            BTT_AttackPlayer →
+        Sequence: Patrol Logic →
+            BTT_MoveTo: PatrolPoint →
+            Wait: 3.0 seconds →
+            BTT_SetNextPatrolPoint
+```
+
+## Fixed the bug with the stairs from the first floor to the second floor
+
+```blueprint
+// Stair Collision Fix
+Event BeginPlay →
+    Set Collision Response To Channel: Pawn = Block →
+    Set Collision Object Type: WorldStatic →
+    
+// Player Movement on Stairs
+Event ActorBeginOverlap →
+    Other Actor: BP_Player →
+    Set Movement Mode: Walking →
+    Set Max Step Height: 45.0
+```
+
+## When approaching the door imprisoning the boss, a trigger box and UI pop-up display: "Please search the 3 glowing objects in the factory to open the door"
+
+```blueprint
+// BP_BossDoorTrigger
+Event ActorBeginOverlap →
+    Other Actor →
+    Cast To BP_Player →
+    Is Valid →
+        Get Game Instance →
+        Get Glowing Objects Collected →
+        Branch: Objects Collected < 3 →
+            True →
+                Create Widget: WBP_BossMessage →
+                Set Text: "Please search the 3 glowing objects in the factory to open the door" →
+                Add To Viewport →
+                Set Timer By Function Name: HideMessage (5.0s)
+            False →
+                Play Animation: Door Open
+```
+
+## Created the boss monster and replaced it with a suitable model later (detects the player, tracks the player, attacks the player, summons reinforcements to join the battle when health is low, death logic)
+
+```blueprint
+// Boss Detection System
+Event Tick →
+    Get All Actors Of Class: BP_Player →
+    Get Distance To: Player →
+    Branch: Distance < 2000.0 →
+        Set Blackboard Value: Target = Player →
+        Set Blackboard Value: PlayerDetected = True
+
+// Boss Health-Based Reinforcement
+Event Take Damage →
+    Current Health - Damage →
+    Set Health →
+    Branch: Health < (Max Health * 0.3) →
+        True →
+            Branch: Reinforcements Not Spawned →
+                Spawn Actor From Class: BP_Enemy_Dummy →
+                    Location: Boss Location + (500, 0, 0) →
+                Spawn Actor From Class: BP_Enemy_Dummy →
+                    Location: Boss Location + (-500, 0, 0) →
+                Set Bool: Reinforcements Spawned = True
+
+// Boss Attack Logic  
+BTT_BossAttack →
+    Try Activate Ability By Class: GA_BossAttack →
+    Get Play Length: Attack Montage →
+    Delay: Animation Length →
+    Finish Execute: Success
+```
+
+## Added two enemies patrolling near the glowing boxes to protect them from being hit by the player
+
+```blueprint
+// Guard Spawn System
+Event BeginPlay →
+    Get All Actors Of Class: BP_GlowingObject →
+    For Each Loop: Glowing Objects →
+        Spawn Actor From Class: BP_GuardEnemy →
+            Location: Object Location + Random Vector (Range: 300-500) →
+        Set Blackboard Value: GuardTarget = Current Glowing Object →
+        Set Blackboard Value: PatrolRadius = 400.0
+
+// Guard Patrol Logic
+BTS_GuardPatrol →
+    Get Blackboard Value: GuardTarget →
+    Get Actor Location: Target →
+    Make Vector: Random Point In Circle →
+        Center: Target Location →
+        Radius: 400.0 →
+    Set Blackboard Value: PatrolPoint
+```
+
+## Fixed the bug where the UI above enemies' heads was always displayed in the scene
+
+```blueprint
+// Enemy Widget Visibility Control
+Event BeginPlay →
+    Set Widget Visibility: Hidden
+
+// Camera-Based Display
+Event Player Camera Update →
+    Get Player Camera Manager →
+    Line Trace By Channel →
+        Start: Camera Location →
+        End: Enemy Location →
+    Branch: Hit Result = This Enemy →
+        True → Set Widget Visibility: Visible
+        False → Set Widget Visibility: Hidden
+```
+
+## Fixed the bug where locking onto the enemy with the Q key caused player and monster twitching
+
+```blueprint
+// BP_CursorDirection - Smooth Lock-On
+Event Q Key Pressed →
+    Find Closest Enemy In Range →
+    Branch: Valid Enemy Found →
+        Timeline: Smooth Camera Turn →
+            Track: Alpha (0.0 to 1.0, 0.5s) →
+            Lerp: Current Rotation to Target Rotation →
+            Set Control Rotation: Lerped Rotation →
+        Set Bool: Is Locked On = True
+
+// Anti-Jitter System
+Custom Event: OnDirectionChange →
+    Detection Sensitivity: 100.0 →
+    Branch: Mouse Movement > Sensitivity →
+        Update Target Lock →
+    Else →
+        Maintain Current Lock
+```
+
+## Added game music and sound effects; the volume can be adjusted in the UI's audio settings
+
+```blueprint
+// WBP_UserInterface Audio Controls
+Event Volume Slider Value Changed →
+    Get Slider Value →
+    Set Sound Class Volume →
+        Sound Class: Master →
+        Volume: Slider Value →
+    Set Sound Class Volume →
+        Sound Class: Music → 
+        Volume: Slider Value →
+    Set Sound Class Volume →
+        Sound Class: SFX →
+        Volume: Slider Value
+
+// Audio Assets Integration
+Sound Assets:
+├── Change Page Button: Cue_Ch
+├── Main Menu Button: Cue_Me
+└── Tab Button: Cue_Tal
+
+// Save Audio Settings
+Event Apply Audio Settings →
+    Create Save Game Object →
+    Set Master Volume: Slider Value →
+    Set Music Volume: Music Slider Value →
+    Set SFX Volume: SFX Slider Value →
+    Save Game To Slot: "AudioSettings"
+```
+
+## Fully designed and programmed the game's start screen UI (adjustable resolution, window size, screen brightness, etc.)
+
+```blueprint
+// WBP_UserInterface Main Menu System
+Event Initialize →
+    Populate Resolution Dropdown →
+    Set Default Values →
+    Bind Button Events
+
+// Resolution Control
+Event Resolution Dropdown Changed →
+    Get Selected Option →
+    Parse Resolution String →
+    Set Screen Resolution →
+        Size X: Parsed Width →
+        Size Y: Parsed Height
+
+// Window Mode Toggle
+Event Window Mode Button Clicked →
+    Get Current Window Mode →
+    Branch: Is Fullscreen →
+        True → Set Window Mode: Windowed
+        False → Set Window Mode: Fullscreen
+
+// Brightness Control  
+Event Brightness Slider Changed →
+    Get Slider Value →
+    Get Post Process Settings →
+    Set Exposure Compensation: Slider Value →
+    Apply Post Process Settings
+
+// Settings Save/Load
+Event Save Settings →
+    Create Save Game Object →
+    Set Resolution: Current Resolution →
+    Set Window Mode: Current Mode →
+    Set Brightness: Current Brightness →
+    Save Game To Slot: "GameSettings"
+
+Event Load Settings →
+    Load Game From Slot: "GameSettings" →
+    Apply Saved Resolution →
+    Apply Saved Window Mode →
+    Apply Saved Brightness
+```
